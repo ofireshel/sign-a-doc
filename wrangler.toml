@@ -1,0 +1,12 @@
+name = "sign-a-doc"
+compatibility_date = "2026-04-12"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sign-a-doc"
+database_id = "679f4132-915a-4b4b-bf59-cecd6eca3fe7"
+
+[[r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "sign-a-doc-documents"
