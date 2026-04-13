@@ -28,6 +28,9 @@ export const onRequestGet = async (context: {
 
     const headers = new Headers();
     headers.set("Content-Type", "application/pdf");
+    headers.set("Cache-Control", "private, no-store, max-age=0");
+    headers.set("Pragma", "no-cache");
+    headers.set("Expires", "0");
     headers.set(
       "Content-Disposition",
       `inline; filename="${record.file_name.replace(/"/g, "")}"`

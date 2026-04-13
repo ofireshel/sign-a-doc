@@ -10,6 +10,17 @@ import {
   parseFieldPosition
 } from "../_lib/utils";
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export const onRequestGet = async (context: { request: Request; env: Env }) => {
   try {
     const user = await requireUser(context.request, context.env);
@@ -89,6 +100,10 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
 
     if (file.type !== "application/pdf") {
       return error("Only PDF uploads are supported.");
+    }
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return error("PDF uploads must be 10 MB or smaller.");
     }
 
     const field = parseFieldPosition(fieldValue);
@@ -200,6 +215,9 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       }
     });
 
+    const safeTitle = escapeHtml(title);
+    const safeSenderEmail = escapeHtml(user.email ?? "A sender");
+
     const resend = new Resend(context.env.RESEND_API_KEY);
     await resend.emails.send({
       from: context.env.RESEND_FROM_EMAIL,
@@ -208,7 +226,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
           <h2>SIGN-A-DOC signature request</h2>
-          <p>${user.email ?? "A sender"} requested your signature on <strong>${title}</strong>.</p>
+          <p>${safeSenderEmail} requested your signature on <strong>${safeTitle}</strong>.</p>
           <p>Log in with this email address and open the document here:</p>
           <p><a href="${signingUrl}">${signingUrl}</a></p>
           <p>If you were not expecting this request, you can ignore this email.</p>

@@ -10,6 +10,15 @@ import {
   parseFieldPosition
 } from "../../../_lib/utils";
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function toBase64(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) {
@@ -81,6 +90,30 @@ export const onRequestPost = async (context: {
 
     const signedAt = new Date().toISOString();
     const { ipAddress, userAgent } = getRequestMeta(context.request);
+    const safeTitle = escapeHtml(record.title);
+    const safeSignerEmail = escapeHtml(user.email ?? "the recipient");
+
+    const resend = new Resend(context.env.RESEND_API_KEY);
+    await resend.emails.send({
+      from: context.env.RESEND_FROM_EMAIL,
+      to: [record.sender_email],
+      subject: `Document signed: ${record.title}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+          <h2>Your document has been signed</h2>
+          <p><strong>${safeTitle}</strong> was signed by ${safeSignerEmail}.</p>
+          <p>The signed PDF is attached to this email. Temporary stored files are encrypted during processing and deleted after delivery.</p>
+        </div>
+      `,
+      attachments: [
+        {
+          filename: `signed-${record.file_name}`,
+          content: toBase64(new Uint8Array(signedBytes))
+        }
+      ]
+    });
+
+    await context.env.DOCUMENTS.delete(record.original_file_key);
 
     await context.env.DB.batch([
       context.env.DB.prepare(
@@ -111,28 +144,6 @@ export const onRequestPost = async (context: {
         signatureType
       }
     });
-
-    const resend = new Resend(context.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: context.env.RESEND_FROM_EMAIL,
-      to: [record.sender_email],
-      subject: `Document signed: ${record.title}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-          <h2>Your document has been signed</h2>
-          <p><strong>${record.title}</strong> was signed by ${user.email ?? "the recipient"}.</p>
-          <p>The signed PDF is attached to this email. Temporary stored files are encrypted during processing and deleted after delivery.</p>
-        </div>
-      `,
-      attachments: [
-        {
-          filename: `signed-${record.file_name}`,
-          content: toBase64(new Uint8Array(signedBytes))
-        }
-      ]
-    });
-
-    await context.env.DOCUMENTS.delete(record.original_file_key);
 
     return json({
       message:

@@ -51,6 +51,9 @@ type PdfPagePreview = {
   height: number;
 };
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_LABEL = "10 MB";
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const postAuthRedirectStorageKey = "sign-a-doc-post-auth-redirect";
@@ -424,6 +427,11 @@ function NewRequestPanel({
       return;
     }
 
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(`PDF uploads must be ${MAX_UPLOAD_SIZE_LABEL} or smaller.`);
+      return;
+    }
+
     setSubmitting(true);
     setFeedback(null);
     setError(null);
@@ -508,8 +516,17 @@ function NewRequestPanel({
             type="file"
             onChange={(event) => {
               const nextFile = event.target.files?.[0] ?? null;
+
+              if (nextFile && nextFile.size > MAX_UPLOAD_BYTES) {
+                setFile(null);
+                setField(null);
+                setError(`PDF uploads must be ${MAX_UPLOAD_SIZE_LABEL} or smaller.`);
+                return;
+              }
+
               setFile(nextFile);
               setField(null);
+              setError(null);
             }}
           />
         </label>
