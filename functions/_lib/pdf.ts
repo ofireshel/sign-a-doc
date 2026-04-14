@@ -1,5 +1,5 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import type { FieldPosition } from "./types";
+import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
+import type { FieldKind, SignerField } from "./types";
 
 function decodeDataUrlImage(dataUrl: string) {
   const match = dataUrl.match(/^data:(image\/png|image\/jpeg);base64,(.+)$/);
@@ -17,41 +17,66 @@ function decodeDataUrlImage(dataUrl: string) {
   return { bytes, mimeType };
 }
 
-export async function applySignatureToPdf(args: {
-  originalPdf: ArrayBuffer;
-  field: FieldPosition;
+type AppliedMark = {
   signatureType: "draw" | "type";
   typedSignature?: string;
   drawnSignature?: string;
-  signerEmail: string;
-}) {
-  const pdf = await PDFDocument.load(args.originalPdf);
-  const page = pdf.getPage(args.field.page - 1);
+};
 
-  if (!page) {
-    throw new Error("The requested signature page does not exist in the PDF.");
-  }
-
+function getFieldDimensions(field: SignerField, page: { getSize: () => { width: number; height: number } }) {
   const { width, height } = page.getSize();
-  const x = args.field.x * width;
-  const y = height - (args.field.y + args.field.height) * height;
-  const boxWidth = args.field.width * width;
-  const boxHeight = args.field.height * height;
+  const x = field.x * width;
+  const y = height - (field.y + field.height) * height;
+  const boxWidth = field.width * width;
+  const boxHeight = field.height * height;
   const horizontalPadding = Math.max(10, boxWidth * 0.08);
   const verticalPadding = Math.max(8, boxHeight * 0.14);
   const maxRenderWidth = Math.max(1, boxWidth - horizontalPadding * 2);
   const maxRenderHeight = Math.max(1, boxHeight - verticalPadding * 2);
 
-  if (args.signatureType === "draw") {
-    if (!args.drawnSignature) {
+  return {
+    x,
+    y,
+    boxWidth,
+    boxHeight,
+    horizontalPadding,
+    maxRenderWidth,
+    maxRenderHeight
+  };
+}
+
+async function drawFieldMark(args: {
+  pdf: PDFDocument;
+  field: SignerField;
+  mark: AppliedMark;
+  typedFont: PDFFont | null;
+}) {
+  const page = args.pdf.getPage(args.field.page - 1);
+
+  if (!page) {
+    throw new Error("The requested signature page does not exist in the PDF.");
+  }
+
+  const {
+    x,
+    y,
+    boxWidth,
+    boxHeight,
+    horizontalPadding,
+    maxRenderWidth,
+    maxRenderHeight
+  } = getFieldDimensions(args.field, page);
+
+  if (args.mark.signatureType === "draw") {
+    if (!args.mark.drawnSignature) {
       throw new Error("Missing drawn signature.");
     }
 
-    const image = decodeDataUrlImage(args.drawnSignature);
+    const image = decodeDataUrlImage(args.mark.drawnSignature);
     const embeddedImage =
       image.mimeType === "image/png"
-        ? await pdf.embedPng(image.bytes)
-        : await pdf.embedJpg(image.bytes);
+        ? await args.pdf.embedPng(image.bytes)
+        : await args.pdf.embedJpg(image.bytes);
 
     const aspectRatio = embeddedImage.width / embeddedImage.height;
     let renderWidth = maxRenderWidth;
@@ -68,21 +93,56 @@ export async function applySignatureToPdf(args: {
       width: renderWidth,
       height: renderHeight
     });
-  } else {
-    if (!args.typedSignature) {
-      throw new Error("Missing typed signature.");
+    return;
+  }
+
+  if (!args.mark.typedSignature) {
+    throw new Error("Missing typed signature.");
+  }
+
+  if (!args.typedFont) {
+    throw new Error("Missing signature font.");
+  }
+
+  const fontSize = Math.min(
+    args.field.kind === "initials" ? 26 : 22,
+    Math.max(12, maxRenderHeight * (args.field.kind === "initials" ? 0.68 : 0.55))
+  );
+
+  page.drawText(args.mark.typedSignature, {
+    x: x + horizontalPadding,
+    y: y + (boxHeight - fontSize) / 2,
+    size: fontSize,
+    font: args.typedFont,
+    color: rgb(0.05, 0.11, 0.22),
+    maxWidth: maxRenderWidth
+  });
+}
+
+export async function applySignatureToPdf(args: {
+  originalPdf: ArrayBuffer;
+  fields: SignerField[];
+  marks: Partial<Record<FieldKind, AppliedMark>>;
+}) {
+  const pdf = await PDFDocument.load(args.originalPdf);
+  const needsTypedFont = Object.values(args.marks).some(
+    (mark) => mark?.signatureType === "type"
+  );
+  const typedFont = needsTypedFont
+    ? await pdf.embedFont(StandardFonts.HelveticaOblique)
+    : null;
+
+  for (const field of args.fields) {
+    const mark = args.marks[field.kind];
+    if (!mark) {
+      throw new Error(`Missing ${field.kind} input.`);
     }
 
-    const font = await pdf.embedFont(StandardFonts.HelveticaOblique);
-    const fontSize = Math.min(22, Math.max(12, maxRenderHeight * 0.55));
-
-    page.drawText(args.typedSignature, {
-      x: x + horizontalPadding,
-      y: y + (boxHeight - fontSize) / 2,
-      size: fontSize,
-      font,
-      color: rgb(0.05, 0.11, 0.22),
-      maxWidth: maxRenderWidth
+    await drawFieldMark({
+      pdf,
+      field,
+      mark,
+      typedFont
     });
   }
 

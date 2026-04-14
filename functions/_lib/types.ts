@@ -17,7 +17,14 @@ export type FieldPosition = {
   height: number;
 };
 
+export type FieldKind = "signature" | "initials";
+
+export type SignerField = FieldPosition & {
+  kind: FieldKind;
+};
+
 export type SigningRecord = {
+  sign_request_id: string;
   document_id: string;
   title: string;
   file_name: string;
@@ -31,5 +38,16 @@ export type SigningRecord = {
   request_status: string;
   token: string;
   signer_field_json: string;
+  signed_at: string | null;
+};
+
+export type SignRequestSummary = {
+  id: string;
+  document_id: string;
+  token: string;
+  recipient_email: string;
+  recipient_name: string | null;
+  signer_field_json: string;
+  status: string;
   signed_at: string | null;
 };

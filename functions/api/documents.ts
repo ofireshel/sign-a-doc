@@ -1,13 +1,14 @@
 import { Resend } from "resend";
-import { requireUser, getRequestMeta } from "../_lib/auth";
+import { getRequestMeta, requireUser } from "../_lib/auth";
 import { encryptDocument } from "../_lib/encryption";
 import { error, json } from "../_lib/http";
-import type { Env } from "../_lib/types";
+import type { Env, SignerField } from "../_lib/types";
 import {
   createSigningToken,
   getBaseUrl,
   logAuditEvent,
-  parseFieldPosition
+  parseFieldPosition,
+  parseSignerFields
 } from "../_lib/utils";
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -21,50 +22,158 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
+function parseRequestFields(formData: FormData): SignerField[] {
+  const fieldsValue = String(formData.get("fields") ?? "").trim();
+  if (fieldsValue) {
+    return parseSignerFields(fieldsValue);
+  }
+
+  const legacyFieldValue = String(formData.get("field") ?? "").trim();
+  if (!legacyFieldValue) {
+    throw new Error("Add at least one signature or initials field.");
+  }
+
+  return [
+    {
+      ...parseFieldPosition(legacyFieldValue),
+      kind: "signature"
+    }
+  ];
+}
+
+function summarizeFields(fields: SignerField[]) {
+  return fields.reduce(
+    (summary, field) => {
+      if (field.kind === "initials") {
+        summary.initialsMarks += 1;
+      } else {
+        summary.signatureMarks += 1;
+      }
+
+      summary.totalMarks += 1;
+      return summary;
+    },
+    {
+      totalMarks: 0,
+      signatureMarks: 0,
+      initialsMarks: 0
+    }
+  );
+}
+
+function describeRequestedMarks(fields: SignerField[]) {
+  const hasSignature = fields.some((field) => field.kind === "signature");
+  const hasInitials = fields.some((field) => field.kind === "initials");
+
+  if (hasSignature && hasInitials) {
+    return "signature and initials";
+  }
+
+  if (hasInitials) {
+    return "initials";
+  }
+
+  return "signature";
+}
+
 export const onRequestGet = async (context: { request: Request; env: Env }) => {
   try {
     const user = await requireUser(context.request, context.env);
-    const rows = await context.env.DB.prepare(
-      `
-        SELECT
-          d.id,
-          d.title,
-          d.file_name,
-          d.recipient_email,
-          d.status,
-          d.created_at,
-          d.signed_at,
-          sr.token
-        FROM documents d
-        LEFT JOIN sign_requests sr ON sr.document_id = d.id
-        WHERE d.sender_user_id = ?
-        ORDER BY d.created_at DESC
-      `
-    )
-      .bind(user.id)
-      .all<{
-        id: string;
-        title: string;
-        file_name: string;
-        recipient_email: string;
-        status: string;
-        created_at: string;
-        signed_at: string | null;
-        token: string;
-      }>();
+    const [documentRows, requestRows] = await Promise.all([
+      context.env.DB.prepare(
+        `
+          SELECT
+            id,
+            title,
+            file_name,
+            recipient_email,
+            status,
+            created_at,
+            signed_at
+          FROM documents
+          WHERE sender_user_id = ?
+          ORDER BY created_at DESC
+        `
+      )
+        .bind(user.id)
+        .all<{
+          id: string;
+          title: string;
+          file_name: string;
+          recipient_email: string;
+          status: string;
+          created_at: string;
+          signed_at: string | null;
+        }>(),
+      context.env.DB.prepare(
+        `
+          SELECT
+            sr.document_id,
+            sr.token,
+            sr.signer_field_json
+          FROM sign_requests sr
+          INNER JOIN documents d ON d.id = sr.document_id
+          WHERE d.sender_user_id = ?
+          ORDER BY sr.created_at ASC, sr.id ASC
+        `
+      )
+        .bind(user.id)
+        .all<{
+          document_id: string;
+          token: string;
+          signer_field_json: string;
+        }>()
+    ]);
 
     const baseUrl = getBaseUrl(context.env, context.request);
+    const requestSummaryByDocument = new Map<
+      string,
+      {
+        signingUrl: string;
+        totalMarks: number;
+        signatureMarks: number;
+        initialsMarks: number;
+      }
+    >();
+
+    for (const row of requestRows.results ?? []) {
+      const existing = requestSummaryByDocument.get(row.document_id) ?? {
+        signingUrl: `${baseUrl}/#/sign/${row.token}`,
+        totalMarks: 0,
+        signatureMarks: 0,
+        initialsMarks: 0
+      };
+      const counts = summarizeFields(parseSignerFields(row.signer_field_json));
+
+      existing.totalMarks += counts.totalMarks;
+      existing.signatureMarks += counts.signatureMarks;
+      existing.initialsMarks += counts.initialsMarks;
+      requestSummaryByDocument.set(row.document_id, existing);
+    }
+
     return json(
-      (rows.results ?? []).map((row) => ({
-        id: row.id,
-        title: row.title,
-        fileName: row.file_name,
-        recipientEmail: row.recipient_email,
-        status: row.status,
-        createdAt: row.created_at,
-        signedAt: row.signed_at,
-        signingUrl: `${baseUrl}/#/sign/${row.token}`
-      }))
+      (documentRows.results ?? []).map((row) => {
+        const summary = requestSummaryByDocument.get(row.id) ?? {
+          signingUrl: "",
+          totalMarks: 0,
+          signatureMarks: 0,
+          initialsMarks: 0
+        };
+
+        return {
+          id: row.id,
+          title: row.title,
+          fileName: row.file_name,
+          recipientEmail: row.recipient_email,
+          status: row.status,
+          createdAt: row.created_at,
+          signedAt: row.signed_at,
+          signingUrl: summary.signingUrl,
+          totalMarks: summary.totalMarks,
+          signatureMarks: summary.signatureMarks,
+          initialsMarks: summary.initialsMarks
+        };
+      })
     );
   } catch (requestError) {
     return error(
@@ -91,11 +200,10 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       .trim()
       .toLowerCase();
     const recipientName = String(formData.get("recipientName") ?? "").trim();
-    const fieldValue = String(formData.get("field") ?? "");
     const file = formData.get("file");
 
-    if (!title || !recipientEmail || !fieldValue || !(file instanceof File)) {
-      return error("Title, recipient email, signature field, and PDF file are required.");
+    if (!title || !recipientEmail || !(file instanceof File)) {
+      return error("Title, recipient email, and PDF file are required.");
     }
 
     if (file.type !== "application/pdf") {
@@ -106,7 +214,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       return error("PDF uploads must be 10 MB or smaller.");
     }
 
-    const field = parseFieldPosition(fieldValue);
+    const fields = parseRequestFields(formData);
     const documentId = crypto.randomUUID();
     const signRequestId = crypto.randomUUID();
     const token = createSigningToken();
@@ -179,7 +287,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         token,
         recipientEmail,
         recipientName || null,
-        JSON.stringify(field),
+        JSON.stringify(fields),
         "sent",
         now
       )
@@ -197,7 +305,8 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       metadata: {
         title,
         fileName: file.name,
-        recipientEmail
+        recipientEmail,
+        fieldCount: fields.length
       }
     });
 
@@ -211,12 +320,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       ipAddress,
       userAgent,
       metadata: {
-        signingUrl
+        signingUrl,
+        fieldCount: fields.length
       }
     });
 
     const safeTitle = escapeHtml(title);
     const safeSenderEmail = escapeHtml(user.email ?? "A sender");
+    const requestedMarks = describeRequestedMarks(fields);
 
     const resend = new Resend(context.env.RESEND_API_KEY);
     await resend.emails.send({
@@ -226,7 +337,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
           <h2>SIGN-A-DOC signature request</h2>
-          <p>${safeSenderEmail} requested your signature on <strong>${safeTitle}</strong>.</p>
+          <p>${safeSenderEmail} requested your ${requestedMarks} on <strong>${safeTitle}</strong>.</p>
           <p>Log in with this email address and open the document here:</p>
           <p><a href="${signingUrl}">${signingUrl}</a></p>
           <p>If you were not expecting this request, you can ignore this email.</p>
@@ -234,7 +345,13 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       `
     });
 
-    return json({ signingUrl }, { status: 201 });
+    return json(
+      {
+        signingUrl,
+        fieldCount: fields.length
+      },
+      { status: 201 }
+    );
   } catch (requestError) {
     return error(
       requestError instanceof Error ? requestError.message : "Unable to create signing request.",

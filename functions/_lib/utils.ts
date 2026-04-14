@@ -1,4 +1,10 @@
-import type { FieldPosition, SigningRecord } from "./types";
+import type {
+  FieldKind,
+  FieldPosition,
+  SignRequestSummary,
+  SignerField,
+  SigningRecord
+} from "./types";
 
 export function createSigningToken() {
   const bytes = new Uint8Array(24);
@@ -26,14 +32,13 @@ export function getBaseUrl(env: { APP_BASE_URL?: string }, request: Request) {
   return url.origin;
 }
 
-export function parseFieldPosition(value: string): FieldPosition {
-  const parsed = JSON.parse(value) as Partial<FieldPosition>;
+function toValidatedFieldPosition(value: Partial<FieldPosition>): FieldPosition {
   const field: FieldPosition = {
-    page: Number(parsed.page),
-    x: Number(parsed.x),
-    y: Number(parsed.y),
-    width: Number(parsed.width),
-    height: Number(parsed.height)
+    page: Number(value.page),
+    x: Number(value.x),
+    y: Number(value.y),
+    width: Number(value.width),
+    height: Number(value.height)
   };
 
   if (
@@ -59,6 +64,53 @@ export function parseFieldPosition(value: string): FieldPosition {
   }
 
   return field;
+}
+
+export function parseFieldPosition(value: string): FieldPosition {
+  return toValidatedFieldPosition(JSON.parse(value) as Partial<FieldPosition>);
+}
+
+export function parseFieldKind(value: unknown): FieldKind {
+  if (value === "signature" || value === "initials") {
+    return value;
+  }
+
+  throw new Error("Field type must be signature or initials.");
+}
+
+function parseSignerField(
+  value: unknown,
+  fallbackKind: FieldKind = "signature"
+): SignerField {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Signature field is invalid.");
+  }
+
+  const parsed = value as Partial<SignerField>;
+  return {
+    ...toValidatedFieldPosition(parsed),
+    kind:
+      typeof parsed.kind === "string"
+        ? parseFieldKind(parsed.kind)
+        : fallbackKind
+  };
+}
+
+export function parseSignerFields(
+  value: string,
+  fallbackKind: FieldKind = "signature"
+): SignerField[] {
+  const parsed = JSON.parse(value) as unknown;
+
+  if (Array.isArray(parsed)) {
+    if (!parsed.length) {
+      throw new Error("Add at least one signature or initials field.");
+    }
+
+    return parsed.map((field) => parseSignerField(field, fallbackKind));
+  }
+
+  return [parseSignerField(parsed, fallbackKind)];
 }
 
 export async function logAuditEvent(args: {
@@ -110,6 +162,7 @@ export async function getSigningRecord(
     .prepare(
       `
         SELECT
+          sr.id AS sign_request_id,
           d.id AS document_id,
           d.title,
           d.file_name,
@@ -134,4 +187,31 @@ export async function getSigningRecord(
     .first<SigningRecord>();
 
   return result ?? null;
+}
+
+export async function getDocumentSignRequests(
+  db: D1Database,
+  documentId: string
+): Promise<SignRequestSummary[]> {
+  const result = await db
+    .prepare(
+      `
+        SELECT
+          id,
+          document_id,
+          token,
+          recipient_email,
+          recipient_name,
+          signer_field_json,
+          status,
+          signed_at
+        FROM sign_requests
+        WHERE document_id = ?
+        ORDER BY created_at ASC, id ASC
+      `
+    )
+    .bind(documentId)
+    .all<SignRequestSummary>();
+
+  return result.results ?? [];
 }
