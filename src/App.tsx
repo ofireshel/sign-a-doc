@@ -324,7 +324,7 @@ function DashboardPage({
       <header className="hero">
         <div>
           <p className="eyebrow">Secure, free, simple</p>
-          <h1>Document sign</h1>
+          <h1>Document Sign</h1>
         </div>
       </header>
 
@@ -503,7 +503,19 @@ function DashboardPage({
         <p className="muted">
           Document sign will never keep a copy of your document. After the
           signing process is complete, the signed document is sent to the
-          requestor by email and no copy is retained.
+          requestor by email and no copy is retained. All rights reserved 2026.
+        </p>
+        <p className="muted">
+          If you like this free Document Sign site, please consider donating as
+          it wasn&apos;t free to create.{" "}
+          <a
+            className="site-disclaimer__link"
+            href="https://www.paypal.com/donate/?business=CMYHGQAA26SZG&no_recurring=0&currency_code=USD"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Donate via PayPal
+          </a>
         </p>
       </footer>
     </div>
