@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
+import howItWorksBackground from "./assets/how-it-works-bg.png";
 
 GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
@@ -331,10 +332,14 @@ function DashboardPage({
 
       {!session && (
         <section className="grid grid--two" id="how-it-works">
-          <div className="panel">
+          <div
+            className="panel panel--how-it-works"
+            style={{
+              "--how-it-works-bg": `url("${howItWorksBackground}")`
+            } as React.CSSProperties}
+          >
             <p className="eyebrow">How it works</p>
             <ol className="list">
-              <li>Create an account</li>
               <li>Upload the PDF you want to be signed</li>
               <li>Mark every signature and initials spot</li>
               <li>Email recipient via secure link</li>

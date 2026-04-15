@@ -103,6 +103,23 @@ input {
   margin-bottom: 24px;
 }
 
+.panel--how-it-works {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.panel--how-it-works::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(7, 17, 31, 0.78), rgba(7, 17, 31, 0.84)),
+    var(--how-it-works-bg) center / cover no-repeat;
+  opacity: 0.32;
+  z-index: -1;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--brand-strong);
@@ -250,8 +267,8 @@ input {
 .button--google {
   width: 100%;
   margin-top: 12px;
-  background: #1e40af;
-  color: #eff6ff;
+  background: #2563eb;
+  color: white;
 }
 
 .button--danger {
