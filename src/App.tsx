@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
-import howItWorksBackground from "./assets/how-it-works-bg.png";
+import howItWorksBackground from "./assets/Gemini_Generated_Image_1.png";
 
 GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
@@ -67,6 +67,7 @@ type SigningPayload = {
 type PdfPagePreview = {
   pageNumber: number;
   imageUrl: string;
+  ocrImageDataUrl: string;
   width: number;
   height: number;
 };
@@ -541,10 +542,7 @@ function NewRequestPanel({
   const [error, setError] = useState<string | null>(null);
 
   const fieldSummary = useMemo(() => summarizeFields(fields), [fields]);
-  const canSubmit =
-    Boolean(title.trim() && file && recipientEmail.trim()) &&
-    fields.length > 0 &&
-    !placing;
+  const canSubmit = Boolean(title.trim() && file && recipientEmail.trim());
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -702,11 +700,11 @@ function NewRequestPanel({
         <div className="placement-toolbar">
           <div className="segmented-control">
             <button
-              className={
+              className={`button button--signature ${
                 placing && placementKind === "signature"
-                  ? "button button--signature"
-                  : "button button--ghost button--signature-ghost"
-              }
+                  ? "button--signature-active"
+                  : ""
+              }`}
               onClick={() => {
                 setPlacementKind("signature");
                 setPlacing(true);
@@ -718,11 +716,11 @@ function NewRequestPanel({
               Signature
             </button>
             <button
-              className={
+              className={`button button--initials ${
                 placing && placementKind === "initials"
-                  ? "button button--initials"
-                  : "button button--ghost button--initials-ghost"
-              }
+                  ? "button--initials-active"
+                  : ""
+              }`}
               onClick={() => {
                 setPlacementKind("initials");
                 setPlacing(true);
@@ -772,6 +770,7 @@ function NewRequestPanel({
           file={file}
           fields={createPreviewFields(fields)}
           placementKind={placing ? placementKind : null}
+          session={session}
           onAddField={(kind, field) => {
             setFields((current) => [
               ...current,
@@ -796,7 +795,7 @@ function NewRequestPanel({
 
         <button
           className="button button--primary"
-          disabled={!canSubmit || submitting}
+          disabled={submitting}
           type="submit"
         >
           {submitting ? "Sending..." : "Send signing request"}
@@ -1004,6 +1003,7 @@ function SigningPage({
                 file={fileBlob}
                 fields={createPreviewFields(payload.request.fields)}
                 placementKind={null}
+                session={session}
                 readOnly
               />
             ) : null}
@@ -1329,6 +1329,7 @@ function PdfPlacementEditor({
   file,
   fields,
   placementKind,
+  session,
   onAddField,
   onRemoveField,
   readOnly = false
@@ -1336,11 +1337,24 @@ function PdfPlacementEditor({
   file: File | Blob | null;
   fields: PdfEditorField[];
   placementKind: FieldKind | null;
+  session: Session | null;
   onAddField?: (kind: FieldKind, field: FieldPosition) => void;
   onRemoveField?: (id: string) => void;
   readOnly?: boolean;
 }) {
-  const pages = usePdfPreview(file);
+  const [translatedFile, setTranslatedFile] = useState<Blob | null>(null);
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationError, setTranslationError] = useState<string | null>(null);
+  const displayFile = showTranslation && translatedFile ? translatedFile : file;
+  const pages = usePdfPreview(displayFile);
+
+  useEffect(() => {
+    setShowTranslation(false);
+    setTranslationLoading(false);
+    setTranslationError(null);
+    setTranslatedFile(null);
+  }, [file]);
 
   if (!file) {
     return (
@@ -1354,10 +1368,101 @@ function PdfPlacementEditor({
     return <div className="pdf-placeholder">Rendering PDF preview...</div>;
   }
 
+  const canTranslate = Boolean(session);
+
+  async function handleToggleTranslation() {
+    if (showTranslation) {
+      setShowTranslation(false);
+      return;
+    }
+
+    if (!file) {
+      setTranslationError("Upload or load a PDF before requesting translation.");
+      return;
+    }
+
+    if (!session) {
+      setTranslationError("Log in before translating the PDF preview.");
+      return;
+    }
+
+    setTranslationError(null);
+
+    if (!translatedFile) {
+      setTranslationLoading(true);
+
+      try {
+        const sourceFile = file;
+        const formData = new FormData();
+        formData.append(
+          "file",
+          sourceFile instanceof File
+            ? sourceFile
+            : new File([sourceFile], "preview.pdf", { type: "application/pdf" })
+        );
+        formData.append(
+          "pageImages",
+          JSON.stringify(
+            pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              imageDataUrl: page.ocrImageDataUrl
+            }))
+          )
+        );
+        setTranslatedFile(
+          await authedBlobRequest("/api/pdf-translation", session, {
+            method: "POST",
+            body: formData
+          })
+        );
+      } catch (translationRequestError) {
+        setTranslationError(asErrorMessage(translationRequestError));
+        return;
+      } finally {
+        setTranslationLoading(false);
+      }
+    }
+
+    setShowTranslation(true);
+  }
+
   return (
-    <div className="pdf-stack">
+    <div className="stack">
+      <div className="pdf-toolbar">
+        <button
+          className={`button button--translate ${
+            showTranslation ? "button--translate-active" : ""
+          }`}
+          aria-pressed={showTranslation}
+          disabled={translationLoading || !canTranslate}
+          onClick={() => {
+            handleToggleTranslation().catch(() => undefined);
+          }}
+          type="button"
+        >
+          {translationLoading
+            ? "Translating..."
+            : showTranslation
+              ? "Show original PDF"
+              : "Show English translation"}
+        </button>
+        {!canTranslate ? (
+          <p className="muted pdf-toolbar__hint">
+            Translation is available after sign-in.
+          </p>
+        ) : (
+          <p className="muted pdf-toolbar__hint">
+            The translated English version is generated server-side, uses OCR for
+            scanned PDFs when needed, and does not replace the stored original
+            PDF.
+          </p>
+        )}
+      </div>
+      {translationError ? <p className="error-text">{translationError}</p> : null}
+      <div className="pdf-stack">
       {pages.map((page) => {
         const pageFields = fields.filter((item) => item.field.page === page.pageNumber);
+
         return (
           <div
             className={`pdf-page ${
@@ -1420,6 +1525,7 @@ function PdfPlacementEditor({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -1613,6 +1719,7 @@ function usePdfPreview(file: File | Blob | null) {
         nextPages.push({
           pageNumber: index,
           imageUrl: canvas.toDataURL("image/png"),
+          ocrImageDataUrl: createOcrImageDataUrl(canvas),
           width: viewport.width,
           height: viewport.height
         });
@@ -1635,6 +1742,25 @@ function usePdfPreview(file: File | Blob | null) {
   }, [file]);
 
   return pages;
+}
+
+function createOcrImageDataUrl(sourceCanvas: HTMLCanvasElement) {
+  const maxWidth = 1200;
+  if (sourceCanvas.width <= maxWidth) {
+    return sourceCanvas.toDataURL("image/jpeg", 0.58);
+  }
+
+  const scale = maxWidth / sourceCanvas.width;
+  const targetCanvas = document.createElement("canvas");
+  targetCanvas.width = maxWidth;
+  targetCanvas.height = Math.round(sourceCanvas.height * scale);
+  const context = targetCanvas.getContext("2d");
+  if (!context) {
+    return sourceCanvas.toDataURL("image/jpeg", 0.58);
+  }
+
+  context.drawImage(sourceCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+  return targetCanvas.toDataURL("image/jpeg", 0.58);
 }
 
 async function authedJsonRequest<T>(
@@ -1671,11 +1797,20 @@ async function authedJsonRequest<T>(
   return (await response.json()) as T;
 }
 
-async function authedBlobRequest(url: string, session: Session) {
+async function authedBlobRequest(
+  url: string,
+  session: Session,
+  options: {
+    method?: string;
+    body?: BodyInit;
+  } = {}
+) {
   const response = await fetch(url, {
+    method: options.method ?? "GET",
     headers: {
       Authorization: `Bearer ${session.access_token}`
-    }
+    },
+    body: options.body
   });
 
   if (!response.ok) {

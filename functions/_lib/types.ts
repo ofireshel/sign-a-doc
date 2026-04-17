@@ -3,6 +3,7 @@ export interface Env {
   DOCUMENTS: R2Bucket;
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
+  GEMINI_API_KEY?: string;
   DOCUMENT_ENCRYPTION_KEY?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
